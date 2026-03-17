@@ -16,20 +16,7 @@ console.log("🚀 Starting Cognix backend...");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Initialize Gemini API
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// ✅ Start server FIRST (prevents Render timeout)
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Server running on port ${PORT}`);
-});
-
-// ✅ Connect DB AFTER server starts (non-blocking)
-connectDB()
-  .then(() => console.log("✅ MongoDB Connected"))
-  .catch((err) => console.error('❌ MongoDB connection failed:', err));
-
-// ✅ CORS (allow all for production)
+// Middleware
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
@@ -38,47 +25,27 @@ app.use(cors({
 
 app.use(express.json());
 
-// ✅ Health check route (VERY IMPORTANT for Render)
+// ✅ Health check route (VERY IMPORTANT)
 app.get('/', (req, res) => {
   res.send('Cognix backend running 🚀');
 });
 
-// ================= HELPER =================
-async function generateWithRetry(model, prompt, maxRetries = 2, timeoutSeconds = 30) {
-  let lastError;
-  let baseWaitTime = 2000;
-  const startTime = Date.now();
+// Initialize Gemini
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const elapsedSeconds = (Date.now() - startTime) / 1000;
-      if (elapsedSeconds > timeoutSeconds) {
-        throw new Error(`Timeout after ${timeoutSeconds}s`);
-      }
+// ================= DB CONNECTION (NON-BLOCKING) =================
+connectDB()
+  .then(() => console.log("✅ MongoDB Connected"))
+  .catch((err) => console.error("❌ MongoDB connection failed:", err));
 
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      return response.text();
+// ================= ERROR HANDLING =================
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err);
+});
 
-    } catch (error) {
-      lastError = error;
-
-      const isRateLimitError =
-        error.status === 429 ||
-        error.message.includes('quota') ||
-        error.message.includes('rate');
-
-      if (isRateLimitError && attempt < maxRetries) {
-        console.warn(`Retry ${attempt}...`);
-        await new Promise(r => setTimeout(r, baseWaitTime * attempt));
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  throw lastError;
-}
+process.on('unhandledRejection', (err) => {
+  console.error('❌ Unhandled Rejection:', err);
+});
 
 // ================= AUTH =================
 function authMiddleware(req, res, next) {
@@ -94,16 +61,39 @@ function authMiddleware(req, res, next) {
     req.userId = decoded.userId;
     next();
   } catch {
-    return res.status(401).json({ error: 'Invalid token.' });
+    return res.status(401).json({ error: 'Invalid or expired token.' });
   }
 }
 
-// ================= ROUTES =================
-
-// Health
+// ================= TEST ROUTE =================
 app.get('/api/test', (req, res) => {
   res.json({ message: "API working ✅" });
 });
 
-// ================= YOUR EXISTING ROUTES =================
-// (KEEP YOUR generate-notes, auth, lectures routes SAME)
+// ================= HELPER =================
+async function generateWithRetry(model, prompt, maxRetries = 2) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      return response.text();
+    } catch (error) {
+      lastError = error;
+      console.warn(`Retry ${attempt}...`);
+      await new Promise(r => setTimeout(r, 2000 * attempt));
+    }
+  }
+
+  throw lastError;
+}
+
+// ================= YOUR MAIN ROUTES =================
+
+// KEEP your existing routes SAME (generate-notes, auth, lectures, delete, etc.)
+
+// ================= START SERVER (VERY IMPORTANT) =================
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
