@@ -11,6 +11,8 @@ import User from './backend/models/User.js';
 
 dotenv.config();
 
+console.log("Starting Cognix backend...");
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -19,17 +21,12 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Connect to MongoDB
 connectDB().catch((err) => {
-  console.error('Failed to connect to MongoDB on startup:', err);
+  console.error('MongoDB connection failed:', err);
 });
 
 // Configure CORS to explicitly allow the Vite frontend
 app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'http://localhost:5174',
-    'http://127.0.0.1:5174',
-  ],
+  origin: '*',
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -42,6 +39,11 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+// Root health check route for Render
+app.get('/', (req, res) => {
+  res.send('Cognix backend running 🚀');
+});
 
 // Helper function to handle Gemini API requests with retry logic for rate limiting
 async function generateWithRetry(model, prompt, maxRetries = 2, timeoutSeconds = 30) {
@@ -445,6 +447,6 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+app.listen(process.env.PORT || 5000, '0.0.0.0', () => {
+  console.log(`Server running on port ${process.env.PORT || 5000}`);
 });
