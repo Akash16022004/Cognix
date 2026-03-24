@@ -16,7 +16,7 @@ function MermaidBlock({ code }) {
           setSvg(svg);
         }
       } catch (err) {
-        console.error('Mermaid render error:', err);
+        console.warn('Mermaid render failed, showing code block fallback.');
         if (!cancelled) {
           setSvg(null);
         }

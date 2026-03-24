@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Navbar from '../components/Navbar.jsx';
 import Sidebar from '../components/Sidebar.jsx';
 import NotesDisplay from '../components/NotesDisplay.jsx';
@@ -30,6 +31,7 @@ const getCleanTitle = (url) => {
 };
 
 function MyLectures() {
+  const [searchParams] = useSearchParams();
   const [lectures, setLectures] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -90,6 +92,38 @@ function MyLectures() {
       mounted = false;
     };
   }, []);
+
+  const filter = searchParams.get('filter'); // e.g. "today"
+  const openId = searchParams.get('open'); // lecture _id to expand
+
+  const visibleLectures = useMemo(() => {
+    if (filter !== 'today') return lectures;
+    const now = new Date();
+    const isSameDay = (a, b) =>
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+
+    return lectures.filter((l) => {
+      if (!l?.createdAt) return false;
+      const d = new Date(l.createdAt);
+      if (Number.isNaN(d.getTime())) return false;
+      return isSameDay(d, now);
+    });
+  }, [filter, lectures]);
+
+  // Auto-open a lecture from query param (?open=<id>)
+  useEffect(() => {
+    if (!openId) return;
+    if (!visibleLectures.length) return;
+
+    const index = visibleLectures.findIndex((l) => String(l?._id) === String(openId));
+    if (index === -1) return;
+
+    // Expand it once data is ready
+    handleViewNotes(visibleLectures[index], index);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId, visibleLectures.length]);
 
   const formatDate = (iso) => {
     if (!iso) return '';
@@ -202,10 +236,14 @@ function MyLectures() {
 
             {!loading && !error && (
               <section className="lectures-list">
-                {lectures.length === 0 ? (
-                  <p className="lectures-empty">No lectures saved yet. Generate some notes first.</p>
+                {visibleLectures.length === 0 ? (
+                  <p className="lectures-empty">
+                    {filter === 'today'
+                      ? 'No lectures generated today yet.'
+                      : 'No lectures saved yet. Generate some notes first.'}
+                  </p>
                 ) : (
-                  lectures.map((lecture, index) => (
+                  visibleLectures.map((lecture, index) => (
                     <article key={lecture._id || lecture.youtubeLink + index} className="lecture-item">
                       <div className="lecture-header">
                         <div className="lecture-info-wrapper">
@@ -250,8 +288,10 @@ function MyLectures() {
                           <button
                             className="delete-btn"
                             onClick={() => handleDelete(lecture._id, index)}
+                            disabled={deletingId === lecture._id}
+                            title={deletingId === lecture._id ? 'Deleting...' : 'Delete lecture'}
                           >
-                            Delete
+                            {deletingId === lecture._id ? 'Deleting...' : 'Delete'}
                           </button>
                         </div>
                       </div>

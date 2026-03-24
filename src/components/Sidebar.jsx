@@ -7,7 +7,7 @@ function Sidebar() {
       <div className="sidebar-section">
         <p className="sidebar-title">Navigation</p>
         <nav className="sidebar-nav">
-          <NavLink to="/" end className="sidebar-link">
+          <NavLink to="/dashboard" className="sidebar-link">
             🏠 Dashboard
           </NavLink>
           <NavLink to="/new" className="sidebar-link">

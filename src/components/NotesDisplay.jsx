@@ -136,6 +136,14 @@ function NotesDisplay({ parsedNotes, activeTab, setActiveTab }) {
                 return <MermaidBlock code={code} />;
               }
 
+              if (inline) {
+                return (
+                  <code className={className} {...props}>
+                    {children}
+                  </code>
+                );
+              }
+
               return (
                 <pre className={className}>
                   <code {...props}>{children}</code>

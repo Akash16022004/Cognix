@@ -10,7 +10,7 @@ function Navbar() {
           <p className="cognix-slogan">Learn Faster with AI</p>
         </Link>
         <nav className="main-nav">
-          <NavLink to="/" end className="nav-item">
+          <NavLink to="/dashboard" className="nav-item">
             Dashboard
           </NavLink>
           <NavLink to="/new" className="nav-item">
