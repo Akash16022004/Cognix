@@ -2,7 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { TranscriptClient } from 'youtube-transcript/dist/youtube-transcript.esm.js';
+import { YoutubeTranscript } from 'youtube-transcript/dist/youtube-transcript.esm.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
@@ -268,7 +268,7 @@ app.post('/api/generate-notes', authMiddleware, async (req, res) => {
     let transcriptData;
     try {
       console.log(`[FETCH_TRANSCRIPT] Requesting for ${videoId}...`);
-      transcriptData = await TranscriptClient.getTranscript(videoId);
+      transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
       console.log(`[FETCH_TRANSCRIPT] Success for ${videoId}`);
     } catch (transcriptError) {
       console.error(`[FETCH_TRANSCRIPT] Error for ${videoId}:`, transcriptError);
