@@ -1,0 +1,6 @@
+/* 
+  SPA Redirects for Render/Netlify
+  This ensures that refreshing the page on routes like /login 
+  redirects to index.html so React Router can handle it.
+*/
+/*  /index.html  200

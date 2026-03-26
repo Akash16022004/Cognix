@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { YoutubeTranscript } from 'youtube-transcript/dist/youtube-transcript.esm.js';
@@ -151,6 +152,11 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   try {
+    if (mongoose.connection.readyState !== 1) {
+      console.error('❌ Database not connected while attempting login.');
+      return res.status(503).json({ error: 'Database connection issue. Please try again later.' });
+    }
+
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) {
       return res.status(401).json({ error: 'Invalid email or password.' });
@@ -169,8 +175,11 @@ app.post('/api/auth/login', async (req, res) => {
 
     return res.json({ token, message: 'Login successful!' });
   } catch (error) {
-    console.error('Login error:', error);
-    return res.status(500).json({ error: 'Login failed.' });
+    console.error('❌ Login error details:', error);
+    return res.status(500).json({ 
+      error: 'Login failed due to a server error.', 
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined 
+    });
   }
 });
 
