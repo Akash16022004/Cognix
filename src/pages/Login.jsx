@@ -28,7 +28,11 @@ function Login() {
         navigate('/dashboard');
       }
     } catch (err) {
-      setError(err.message || 'Login failed. Please try again.');
+      if (err.message.includes('401') || err.message.toLowerCase().includes('authorized')) {
+        setError('Invalid email or password. If you recently connected a new database, please Sign Up again.');
+      } else {
+        setError(err.message || 'Login failed. Please try again.');
+      }
     } finally {
       setLoading(false);
     }

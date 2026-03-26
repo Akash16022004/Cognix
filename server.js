@@ -2,7 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { YoutubeTranscript } from 'youtube-transcript/dist/youtube-transcript.esm.js';
+import { TranscriptClient } from 'youtube-transcript-api';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
@@ -229,11 +229,21 @@ app.post('/api/generate-notes', authMiddleware, async (req, res) => {
     // 1) Fetch transcript
     let transcriptData;
     try {
-      transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
+      transcriptData = await TranscriptClient.getTranscript(videoId);
     } catch (transcriptError) {
       console.error('Transcript Fetch Error:', transcriptError);
+      const isTooManyRequests = transcriptError.message?.includes('Too Many Requests') || 
+                                transcriptError.message?.includes('captcha');
+      
+      if (isTooManyRequests) {
+        return res.status(429).json({
+          error: "YouTube is temporarily blocking the server's IP address. Please try again later or use a video with a shorter transcript.",
+          details: "YouTube IP Block / Captcha required."
+        });
+      }
+
       return res.status(400).json({
-        error: `Fetch failed: ${transcriptError.message || 'unknown'}`,
+        error: `Transcript fetch failed: ${transcriptError.message || 'unknown error'}`,
       });
     }
 
