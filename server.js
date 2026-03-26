@@ -273,9 +273,9 @@ app.post('/api/generate-notes', authMiddleware, async (req, res) => {
     } catch (transcriptError) {
       console.error(`[FETCH_TRANSCRIPT] Error for ${videoId}:`, transcriptError);
 
-      if (transcriptError.message?.includes('Too Many Requests') || transcriptError.message?.includes('captcha')) {
+      if (transcriptError.message?.includes('Too Many Requests') || transcriptError.message?.includes('captcha') || transcriptError.message?.toLowerCase().includes('rate')) {
         return res.status(429).json({
-          error: "YouTube is rate-limiting the server. Please try again later or use a different video."
+          error: "⚠️ YouTube is rate-limiting requests. Please try again later."
         });
       }
 
@@ -289,8 +289,8 @@ app.post('/api/generate-notes', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Transcript was empty.' });
     }
 
-    // 2) Chunk transcript (Increase to 20k for efficiency)
-    const chunkSize = 20000;
+    // 2) Chunk transcript (Increase to 25k for efficiency)
+    const chunkSize = 25000;
     const chunks = [];
     for (let i = 0; i < fullTranscript.length; i += chunkSize) {
       chunks.push(fullTranscript.slice(i, i + chunkSize));
@@ -310,10 +310,10 @@ app.post('/api/generate-notes', authMiddleware, async (req, res) => {
         const summary = await generateWithRetry(model, chunkPrompt, 2);
         chunkSummaries.push(summary);
 
-        // Add 3s delay between chunks if there are more
+        // Add 5s delay between chunks if there are more
         if (index < chunks.length - 1) {
-          console.log(`[PROCESS_CHUNKS] Sleeping 3s...`);
-          await sleep(3000);
+          console.log(`[PROCESS_CHUNKS] Sleeping 5s...`);
+          await sleep(5000);
         }
       } catch (err) {
         console.error(`[PROCESS_CHUNKS] Error summarizing chunk ${index + 1}:`, err);
