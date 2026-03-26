@@ -2,7 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { TranscriptClient } from 'youtube-transcript-api';
+import { TranscriptClient } from 'youtube-transcript/dist/youtube-transcript.esm.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
@@ -74,20 +74,51 @@ app.get('/api/test', (req, res) => {
 // ================= HELPER =================
 async function generateWithRetry(model, prompt, maxRetries = 2) {
   let lastError;
+  const timeoutMs = 45000; // 45s max timeout per call
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const result = await model.generateContent(prompt);
+      console.log(`[GEMINI_CALL] Start (Attempt ${attempt})...`);
+
+      const resultPromise = model.generateContent(prompt);
+
+      // Add a timeout safety
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini API timeout')), timeoutMs)
+      );
+
+      const result = await Promise.race([resultPromise, timeoutPromise]);
       const response = await result.response;
-      return response.text();
+      const text = response.text();
+
+      console.log(`[GEMINI_CALL] Success (Attempt ${attempt})`);
+      return text;
     } catch (error) {
       lastError = error;
-      console.warn(`Retry ${attempt}...`);
-      await new Promise(r => setTimeout(r, 2000 * attempt));
+      const isQuotaError = error.message?.includes('429') || error.message?.includes('quota');
+      const waitTime = Math.pow(2, attempt) * 2000; // Exponential backoff: 4s, 8s...
+
+      console.warn(`[GEMINI_CALL] Error (Attempt ${attempt}): ${error.message}. ${isQuotaError ? 'Quota exceeded.' : 'Retrying...'}`);
+
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, waitTime));
+      }
     }
   }
 
   throw lastError;
+}
+
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+function validateYoutubeUrl(urlString) {
+  try {
+    const url = new URL(urlString);
+    const validHosts = ['www.youtube.com', 'youtube.com', 'youtu.be'];
+    return validHosts.includes(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function getVideoId(urlString) {
@@ -175,10 +206,10 @@ app.post('/api/auth/login', async (req, res) => {
 
     return res.json({ token, message: 'Login successful!' });
   } catch (error) {
-    console.error('❌ Login error details:', error);
-    return res.status(500).json({ 
-      error: 'Login failed due to a server error.', 
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined 
+    console.error(`[AUTH_ERROR] Login failure for ${email}:`, error);
+    return res.status(500).json({
+      error: 'Login failed due to a server error.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
@@ -216,34 +247,40 @@ app.post('/api/generate-notes', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'YouTube URL is required' });
   }
 
+  if (!validateYoutubeUrl(url)) {
+    return res.status(400).json({ error: 'Invalid YouTube URL provided.' });
+  }
+
   if (!process.env.GEMINI_API_KEY) {
+    console.error('[CONFIG_ERROR] Gemini API Key missing');
     return res.status(500).json({ error: 'Gemini API Key is not configured on the server.' });
   }
 
   const videoId = getVideoId(url);
   if (!videoId) {
-    return res.status(400).json({ error: 'Invalid YouTube URL. Could not extract Video ID.' });
+    return res.status(400).json({ error: 'Could not extract Video ID from URL.' });
   }
+
+  console.log(`[PROCESS_START] Generating notes for Video: ${videoId}`);
 
   try {
     // 1) Fetch transcript
     let transcriptData;
     try {
+      console.log(`[FETCH_TRANSCRIPT] Requesting for ${videoId}...`);
       transcriptData = await TranscriptClient.getTranscript(videoId);
+      console.log(`[FETCH_TRANSCRIPT] Success for ${videoId}`);
     } catch (transcriptError) {
-      console.error('Transcript Fetch Error:', transcriptError);
-      const isTooManyRequests = transcriptError.message?.includes('Too Many Requests') || 
-                                transcriptError.message?.includes('captcha');
-      
-      if (isTooManyRequests) {
+      console.error(`[FETCH_TRANSCRIPT] Error for ${videoId}:`, transcriptError);
+
+      if (transcriptError.message?.includes('Too Many Requests') || transcriptError.message?.includes('captcha')) {
         return res.status(429).json({
-          error: "YouTube is temporarily blocking the server's IP address. Please try again later or use a video with a shorter transcript.",
-          details: "YouTube IP Block / Captcha required."
+          error: "YouTube is rate-limiting the server. Please try again later or use a different video."
         });
       }
 
       return res.status(400).json({
-        error: `Transcript fetch failed: ${transcriptError.message || 'unknown error'}`,
+        error: `Could not fetch transcript: ${transcriptError.message || 'Unknown error'}`,
       });
     }
 
@@ -252,89 +289,73 @@ app.post('/api/generate-notes', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Transcript was empty.' });
     }
 
-    // 2) Chunk transcript
-    const chunkSize = 5000;
+    // 2) Chunk transcript (Increase to 20k for efficiency)
+    const chunkSize = 20000;
     const chunks = [];
     for (let i = 0; i < fullTranscript.length; i += chunkSize) {
       chunks.push(fullTranscript.slice(i, i + chunkSize));
     }
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' }); // Use stable 1.5-flash
 
-    // 3) Summarize chunks
-    const chunkSummaries = await Promise.all(
-      chunks.map(async (chunk) => {
-        const chunkPrompt = `
-Summarize the following section of a video transcript. Extract the key points, concepts, and relevant details. Keep it concise but comprehensive.
+    // 3) Summarize chunks (SEQUENTIAL to avoid usage overload)
+    console.log(`[PROCESS_CHUNKS] Processing ${chunks.length} chunks...`);
+    const chunkSummaries = [];
+    for (const [index, chunk] of chunks.entries()) {
+      console.log(`[PROCESS_CHUNKS] Chunk ${index + 1}/${chunks.length}`);
 
-Transcript Section:
-${chunk}
-`;
-        try {
-          return await generateWithRetry(model, chunkPrompt, 2);
-        } catch (err) {
-          console.error('Error summarizing chunk:', err);
-          return '';
+      const chunkPrompt = `Summarize this video transcript section. Extract key points and concepts.\n\nSection:\n${chunk}`;
+
+      try {
+        const summary = await generateWithRetry(model, chunkPrompt, 2);
+        chunkSummaries.push(summary);
+
+        // Add 3s delay between chunks if there are more
+        if (index < chunks.length - 1) {
+          console.log(`[PROCESS_CHUNKS] Sleeping 3s...`);
+          await sleep(3000);
         }
-      }),
-    );
+      } catch (err) {
+        console.error(`[PROCESS_CHUNKS] Error summarizing chunk ${index + 1}:`, err);
+      }
+    }
 
     const combinedSummary = chunkSummaries.filter(Boolean).join('\n\n---\n\n');
+    if (!combinedSummary) {
+      return res.status(500).json({ error: 'Failed to generate any summaries from chunks.' });
+    }
 
-    // 4) Final notes prompt (Mermaid + tables, no ASCII)
+    // 4) Final structure
+    console.log('[FINAL_PROMPT] Generating structured notes...');
     const finalPrompt = `
-You are an expert AI learning assistant for Cognix, an AI learning platform that converts lecture transcripts into structured study material.
-I will provide you with a combined summary generated from the entire transcript of a YouTube lecture.
-Your task is to generate high-quality academic notes with the following strict structure.
+Generate high-quality academic notes from this combined summary. Use Markdown with sections for Summary, Key Concepts, Bullet Notes, Quiz Questions (5), and a Mermaid diagram if applicable.
 
-# Output format (Markdown):
-
-## 1. Summary
-Write a clear paragraph explaining the main idea of the lecture.
-
-## 2. Key Concepts
-List the most important concepts and define them clearly.
-
-## 3. Bullet Notes
-Create structured bullet-point notes explaining the lecture step-by-step.
-
-## 4. Quiz Questions
-Generate 5 conceptual questions students might see in exams.
-
-## 5. Visual / Pictographic Explanation
-If a concept would benefit from visual explanation:
-- Prefer a Mermaid diagram using a fenced code block with the language "mermaid".
-- Inside the Mermaid code block, only use valid Mermaid syntax. Do not include raw mathematical notation or long textual definitions inside the diagram.
-- Any mathematical expressions or formal definitions must be written outside the Mermaid block as normal Markdown or in a Markdown table.
-- If a Mermaid diagram is not suitable, use Markdown tables or other structured Markdown instead of ASCII art.
-
-# Rules:
-* Keep explanations clear and simple.
-* Avoid copying sentences directly from the transcript.
-* Focus on important concepts only.
-* Use clean Markdown formatting compatible with ReactMarkdown.
-
-Combined Lecture Summaries:
-${combinedSummary}
+Summary:\n${combinedSummary}
 `;
 
     const markdownNotes = await generateWithRetry(model, finalPrompt, 2);
 
-    // 5) Save to DB (best-effort)
+    // 5) Save to DB
     try {
       await Lecture.create({ youtubeLink: url, notes: markdownNotes });
+      console.log(`[PROCESS_COMPLETE] Notes generated and saved for ${videoId}`);
     } catch (saveError) {
-      console.error('Failed to save lecture:', saveError);
+      console.error('[DB_ERROR] Failed to save lecture:', saveError);
       return res.status(200).json({
         notes: markdownNotes,
-        dbError: 'Lecture could not be saved to the database.',
+        dbError: 'Lecture saved in memory but failed to persist to DB.',
       });
     }
 
     return res.json({ notes: markdownNotes });
   } catch (error) {
-    console.error('Error generating notes:', error);
-    return res.status(500).json({ error: 'An error occurred while generating notes from the transcript.' });
+    console.error(`[PROCESS_ERROR] Failed for ${videoId}:`, error);
+
+    if (error.status === 429 || error.message?.includes('429')) {
+      return res.status(429).json({ error: 'A quota limit was reached. Please try again in 1 minute.' });
+    }
+
+    return res.status(500).json({ error: 'An unexpected error occurred during note generation.' });
   }
 });
 
